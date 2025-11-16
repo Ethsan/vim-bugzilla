@@ -8,6 +8,7 @@ A Vim plugin for interacting with Bugzilla REST API, inspired by vim-fugitive fo
 
 - `:BugzillaShow <bug_id>` - Display full details of a bug including comments
 - `:BugzillaList <search>` - Search and list bugs matching the criteria
+- `:BugzillaOpen [<bug_id>]` - Open bug in web browser (uses bug under cursor if ID not provided)
 
 #### BugzillaList Search Syntax
 
@@ -30,8 +31,10 @@ When viewing a bugzilla buffer (bug details or bug list), the following keybindi
 - `o` - Open bug under cursor in horizontal split
 - `O` - Open bug under cursor in new tab
 - `gO` - Open bug under cursor in vertical split
+- `gb` - Open bug under cursor in web browser
 - `q` - Close current bugzilla buffer
 - `-` - Navigate back to previous bugzilla buffer
+- `?` - Show help with all available keybindings
 
 ### Configuration
 

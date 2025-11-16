@@ -32,6 +32,34 @@ function! s:setup_buffer_mappings() abort
   nnoremap <buffer> <silent> gO :call <SID>open_bug_under_cursor('vsplit')<CR>
   nnoremap <buffer> <silent> q :call <SID>close_bugzilla_buffer()<CR>
   nnoremap <buffer> <silent> - :call <SID>navigate_back()<CR>
+  nnoremap <buffer> <silent> gb :call <SID>cmd_open()<CR>
+  nnoremap <buffer> <silent> ? :call <SID>show_help()<CR>
+endfunction
+
+function! s:show_help() abort
+  let l:help = [
+    \ 'vim-bugzilla keybindings:',
+    \ '',
+    \ '  <CR>  - Open bug under cursor in current window',
+    \ '  o     - Open bug in horizontal split',
+    \ '  O     - Open bug in new tab',
+    \ '  gO    - Open bug in vertical split',
+    \ '  gb    - Open bug in web browser',
+    \ '  q     - Close bugzilla buffer',
+    \ '  -     - Navigate back to previous buffer',
+    \ '  ?     - Show this help',
+    \ '',
+    \ 'Commands:',
+    \ '  :BugzillaShow <id>       - Show bug details',
+    \ '  :BugzillaList <search>   - List bugs matching search',
+    \ '  :BugzillaOpen [<id>]     - Open bug in web browser',
+    \ '',
+    \ 'Press any key to close this help...'
+  \ ]
+  
+  echo join(l:help, "\n")
+  call getchar()
+  redraw!
 endfunction
 
 function! s:extract_bug_id() abort
@@ -284,5 +312,34 @@ function! s:cmd_list(...) abort
   endif
 endfunction
 
+function! s:cmd_open(...) abort
+  " Open bug in web browser
+  let l:bug_id = a:0 > 0 ? a:1 : s:extract_bug_id()
+  
+  if empty(l:bug_id)
+    echohl WarningMsg | echo 'No bug ID specified or found under cursor' | echohl None
+    return
+  endif
+  
+  " Construct web URL (not REST API URL)
+  let l:web_url = substitute(g:bugzilla_url, '/rest$', '', '')
+  let l:url = l:web_url .. '/show_bug.cgi?id=' .. l:bug_id
+  
+  " Try different methods to open URL
+  if has('mac')
+    call system('open ' .. shellescape(l:url))
+  elseif has('unix')
+    call system('xdg-open ' .. shellescape(l:url) .. ' &')
+  elseif has('win32') || has('win64')
+    call system('start ' .. shellescape(l:url))
+  else
+    echohl WarningMsg | echo 'Cannot open browser on this platform' | echohl None
+    return
+  endif
+  
+  echo 'Opened bug ' .. l:bug_id .. ' in browser'
+endfunction
+
 command! -nargs=1 BugzillaShow call s:cmd_show(<f-args>)
 command! -nargs=+ BugzillaList call s:cmd_list(<q-args>)
+command! -nargs=? BugzillaOpen call s:cmd_open(<f-args>)
