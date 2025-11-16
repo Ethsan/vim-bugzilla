@@ -1,0 +1,16 @@
+# Vim swap files
+*.swp
+*.swo
+*~
+.*.swp
+.*.swo
+
+# Vim session files
+Session.vim
+
+# Neovim
+.nvimlog
+
+# OS files
+.DS_Store
+Thumbs.db

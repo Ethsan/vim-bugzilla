@@ -11,6 +11,9 @@ if !exists('g:bugzilla_api_key')
 	let g:bugzilla_api_key = ''
 endif
 
+" Navigation history for back navigation
+let s:bugzilla_history = []
+
 function! s:open_scratch(name, lines) abort
   execute 'belowright new'
   setlocal buftype=nofile bufhidden=wipe noswapfile
@@ -18,6 +21,110 @@ function! s:open_scratch(name, lines) abort
   call append(0, a:lines)
   normal! gg
   setlocal filetype=bugzilla
+  call s:setup_buffer_mappings()
+endfunction
+
+function! s:setup_buffer_mappings() abort
+  " Navigation mappings inspired by vim-fugitive
+  nnoremap <buffer> <silent> <CR> :call <SID>open_bug_under_cursor('edit')<CR>
+  nnoremap <buffer> <silent> o :call <SID>open_bug_under_cursor('split')<CR>
+  nnoremap <buffer> <silent> O :call <SID>open_bug_under_cursor('tabedit')<CR>
+  nnoremap <buffer> <silent> gO :call <SID>open_bug_under_cursor('vsplit')<CR>
+  nnoremap <buffer> <silent> q :call <SID>close_bugzilla_buffer()<CR>
+  nnoremap <buffer> <silent> - :call <SID>navigate_back()<CR>
+  nnoremap <buffer> <silent> gb :call <SID>cmd_open()<CR>
+  nnoremap <buffer> <silent> ? :call <SID>show_help()<CR>
+endfunction
+
+function! s:show_help() abort
+  let l:help = [
+    \ 'vim-bugzilla keybindings:',
+    \ '',
+    \ '  <CR>  - Open bug under cursor in current window',
+    \ '  o     - Open bug in horizontal split',
+    \ '  O     - Open bug in new tab',
+    \ '  gO    - Open bug in vertical split',
+    \ '  gb    - Open bug in web browser',
+    \ '  q     - Close bugzilla buffer',
+    \ '  -     - Navigate back to previous buffer',
+    \ '  ?     - Show this help',
+    \ '',
+    \ 'Commands:',
+    \ '  :BugzillaShow <id>       - Show bug details',
+    \ '  :BugzillaList <search>   - List bugs matching search',
+    \ '  :BugzillaOpen [<id>]     - Open bug in web browser',
+    \ '',
+    \ 'Press any key to close this help...'
+  \ ]
+  
+  echo join(l:help, "\n")
+  call getchar()
+  redraw!
+endfunction
+
+function! s:extract_bug_id() abort
+  let l:line = getline('.')
+  " Try to match bug ID in various formats
+  " Format: "bug 123456"
+  let l:match = matchstr(l:line, '\<bug \zs\d\+')
+  if !empty(l:match)
+    return l:match
+  endif
+  " Format: standalone number at start of line (from bug lists)
+  let l:match = matchstr(l:line, '^\s*\zs\d\+\ze\s')
+  if !empty(l:match)
+    return l:match
+  endif
+  " Format: any number in the line
+  let l:match = matchstr(l:line, '\d\+')
+  return l:match
+endfunction
+
+function! s:open_bug_under_cursor(cmd) abort
+  let l:bug_id = s:extract_bug_id()
+  if empty(l:bug_id)
+    echohl WarningMsg | echo 'No bug ID found under cursor' | echohl None
+    return
+  endif
+  
+  " Save current buffer to history
+  let l:current_buf = bufname('%')
+  if !empty(l:current_buf) && l:current_buf =~# 'bugzilla'
+    call add(s:bugzilla_history, l:current_buf)
+  endif
+  
+  " Open bug based on command
+  if a:cmd ==# 'edit'
+    call s:cmd_show(l:bug_id)
+  elseif a:cmd ==# 'split'
+    execute 'split'
+    call s:cmd_show(l:bug_id)
+  elseif a:cmd ==# 'vsplit'
+    execute 'vsplit'
+    call s:cmd_show(l:bug_id)
+  elseif a:cmd ==# 'tabedit'
+    execute 'tabedit'
+    call s:cmd_show(l:bug_id)
+  endif
+endfunction
+
+function! s:close_bugzilla_buffer() abort
+  let l:buf = bufname('%')
+  if l:buf =~# 'bugzilla' || l:buf =~# 'bug_'
+    bdelete
+  else
+    echohl WarningMsg | echo 'Not a bugzilla buffer' | echohl None
+  endif
+endfunction
+
+function! s:navigate_back() abort
+  if empty(s:bugzilla_history)
+    echohl WarningMsg | echo 'No previous bugzilla buffer' | echohl None
+    return
+  endif
+  
+  let l:prev_buf = remove(s:bugzilla_history, -1)
+  execute 'buffer ' .. l:prev_buf
 endfunction
 
 function! s:get_url(endpoint)
@@ -136,6 +243,23 @@ function! s:format_bug(bug)
 	return l:lines
 endfunction
 
+function! s:format_bug_list(bugs) abort
+  let l:lines = []
+  " Add header
+  call add(l:lines, s:spanned('Bug ID', 'Status    Summary', 79))
+  call add(l:lines, repeat('-', 79))
+  
+  for l:bug in a:bugs
+    let l:status = get(l:bug, 'status', 'UNKNOWN')
+    let l:summary = get(l:bug, 'summary', '')
+    let l:id = get(l:bug, 'id', '')
+    let l:line = printf('%-8s %-10s %s', l:id, l:status, l:summary)
+    call add(l:lines, l:line)
+  endfor
+  
+  return l:lines
+endfunction
+
 function! s:cmd_show(id) abort
 	let l:req = s:create_get_request('/rest/bug/' .. a:id , {'include_fields': ['_default', 'comments']} )
 	let l:out = s:do_requests([l:req])[0]
@@ -143,4 +267,79 @@ function! s:cmd_show(id) abort
 	call s:open_scratch('bug_' .. a:id, l:format)
 endfunction
 
+function! s:cmd_list(...) abort
+  " BugzillaList command - search bugs and display as a list
+  let l:search_query = a:0 > 0 ? a:1 : ''
+  
+  if empty(l:search_query)
+    echohl WarningMsg | echo 'Usage: BugzillaList <search_query>' | echohl None
+    return
+  endif
+  
+  " Build search parameters - support various formats
+  let l:params = {}
+  
+  " Check if query looks like a structured search or just keywords
+  if l:search_query =~# '\(status:\|product:\|component:\|assignee:\)'
+    " Parse structured search
+    let l:parts = split(l:search_query, '\s\+')
+    for l:part in l:parts
+      if l:part =~# ':'
+        let l:split_part = split(l:part, ':', 1)
+        if len(l:split_part) == 2
+          let l:params[l:split_part[0]] = l:split_part[1]
+        endif
+      endif
+    endfor
+  else
+    " Simple keyword search in summary
+    let l:params['summary'] = l:search_query
+  endif
+  
+  " Add default fields if not specified
+  if !has_key(l:params, 'include_fields')
+    let l:params['include_fields'] = ['id', 'status', 'summary', 'priority', 'severity', 'product', 'component', 'assigned_to']
+  endif
+  
+  let l:req = s:create_get_request('/rest/bug', l:params)
+  let l:out = s:do_requests([l:req])[0]
+  
+  if has_key(l:out, 'bugs') && len(l:out.bugs) > 0
+    let l:formatted = s:format_bug_list(l:out.bugs)
+    call s:open_scratch('bugzilla_list_' .. strftime('%Y%m%d_%H%M%S'), l:formatted)
+  else
+    echohl WarningMsg | echo 'No bugs found matching: ' .. l:search_query | echohl None
+  endif
+endfunction
+
+function! s:cmd_open(...) abort
+  " Open bug in web browser
+  let l:bug_id = a:0 > 0 ? a:1 : s:extract_bug_id()
+  
+  if empty(l:bug_id)
+    echohl WarningMsg | echo 'No bug ID specified or found under cursor' | echohl None
+    return
+  endif
+  
+  " Construct web URL (not REST API URL)
+  let l:web_url = substitute(g:bugzilla_url, '/rest$', '', '')
+  let l:url = l:web_url .. '/show_bug.cgi?id=' .. l:bug_id
+  
+  " Try different methods to open URL
+  if has('mac')
+    call system('open ' .. shellescape(l:url))
+  elseif has('unix')
+    call system('xdg-open ' .. shellescape(l:url) .. ' &')
+  elseif has('win32') || has('win64')
+    call system('start ' .. shellescape(l:url))
+  else
+    echohl WarningMsg | echo 'Cannot open browser on this platform' | echohl None
+    return
+  endif
+  
+  echo 'Opened bug ' .. l:bug_id .. ' in browser'
+endfunction
+
 command! -nargs=1 BugzillaShow call s:cmd_show(<f-args>)
+command! -nargs=+ BugzillaList call s:cmd_list(<q-args>)
+command! -nargs=? BugzillaOpen call s:cmd_open(<f-args>)
